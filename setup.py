@@ -54,7 +54,6 @@ def get_extension_hybrid_ep_cpp():
     # Basic compile arguments
     compile_args = {
         "nvcc": [
-            "-std=c++17",
             "-Xcompiler",
             "-fPIC",
             "--expt-relaxed-constexpr",

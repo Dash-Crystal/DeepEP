@@ -116,6 +116,7 @@ HandleImpl Executor::metadata_preprocess_core(
   int32_t *tokens_per_expert_ptr = nullptr;
   handle.overflow_flag =
       torch::empty({1}, torch::dtype(torch::kInt32).device(torch::kCUDA));
+  cudaMemsetAsync(handle.overflow_flag.data_ptr<int>(), 0, sizeof(int32_t), stream);
   if(enable_permute) {
     int num_of_chunks_per_rank = (num_of_tokens_per_rank - 1) / config.num_of_tokens_per_chunk_preprocessing_api + 1;
     handle.dense_chunk_layout = 

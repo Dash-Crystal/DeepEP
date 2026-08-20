@@ -2,9 +2,28 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
 // All rights reserved
 #include "buffer/internode_doca.cuh"
+#include <cerrno>
 #include <sstream>
 #include <cstdlib>
 #include <unordered_map>
+
+static int get_env_int_in_range(const char* name, int default_value, int min_value, int max_value) {
+  const char* raw_value = std::getenv(name);
+  if (raw_value == nullptr || raw_value[0] == '\0') {
+    return default_value;
+  }
+
+  char* end = nullptr;
+  errno = 0;
+  const long parsed_value = std::strtol(raw_value, &end, 10);
+  if (errno != 0 || end == raw_value || *end != '\0' ||
+      parsed_value < min_value || parsed_value > max_value) {
+    fprintf(stderr, "[Warning] %s must be an integer in [%d, %d], got '%s'; using default %d\n",
+            name, min_value, max_value, raw_value, default_value);
+    return default_value;
+  }
+  return static_cast<int>(parsed_value);
+}
 
 // Functions realted to get RDMA context.
 ibv_device *ctx_find_dev(const char *ib_devname) {
@@ -192,6 +211,10 @@ int setup_qp_attr_for_modify(struct ibv_port_attr *port_attr, struct doca_verbs_
   struct remote_info *l_info, struct remote_info *r_info,
   struct ibv_context *ib_context) {
   int status = 0;
+  static const int configured_traffic_class =
+      get_env_int_in_range("NCCL_IB_TC", DEF_IB_TC, -1, 255);
+  const auto traffic_class = static_cast<uint8_t>(
+      configured_traffic_class == -1 ? DEF_IB_TC : configured_traffic_class);
   status = doca_verbs_qp_attr_set_dest_qp_num(qp_attr, r_info->qpn);
   assert(status == 0);
   struct doca_verbs_ah_attr *ah = nullptr;
@@ -200,7 +223,11 @@ int setup_qp_attr_for_modify(struct ibv_port_attr *port_attr, struct doca_verbs_
   if (port_attr->link_layer == IBV_LINK_LAYER_INFINIBAND) {
     status = doca_verbs_ah_attr_set_addr_type(ah, DOCA_VERBS_ADDR_TYPE_IB_NO_GRH);
   } else {
-    status = doca_verbs_ah_attr_set_addr_type(ah, DOCA_VERBS_ADDR_TYPE_IPv4);
+    const auto gid_family = hybrid_ep::getGidAddrFamily(&r_info->gid);
+    const auto addr_type = gid_family == AF_INET6
+                               ? DOCA_VERBS_ADDR_TYPE_IPv6
+                               : DOCA_VERBS_ADDR_TYPE_IPv4;
+    status = doca_verbs_ah_attr_set_addr_type(ah, addr_type);
   }
   assert(status == 0);
   status = doca_verbs_ah_attr_set_dlid(ah, r_info->lid);
@@ -213,7 +240,7 @@ int setup_qp_attr_for_modify(struct ibv_port_attr *port_attr, struct doca_verbs_
   assert(status == 0);
   status = doca_verbs_ah_attr_set_hop_limit(ah, DEF_HOP_LIMIT);
   assert(status == 0);
-  status = doca_verbs_ah_attr_set_traffic_class(ah, DEF_IB_TC);
+  status = doca_verbs_ah_attr_set_traffic_class(ah, traffic_class);
   assert(status == 0);
   status = doca_verbs_qp_attr_set_ah_attr(qp_attr, ah);
   assert(status == 0);
@@ -368,7 +395,12 @@ void RDMACoordinator::init(
   ibv_query_port(ib_context, IB_PORT, &port_attr);
   uint8_t link_layer = port_attr.link_layer;
   assert(link_layer == IBV_LINK_LAYER_INFINIBAND || link_layer == IBV_LINK_LAYER_ETHERNET);
-  hybrid_ep::ncclIbGetGidIndex(ib_context, IB_PORT, &port_attr, &gid_index);
+  const auto gid_status = hybrid_ep::ncclIbGetGidIndex(
+      ib_context, IB_PORT, &port_attr, &gid_index);
+  if (gid_status != ncclSuccess) {
+    fprintf(stderr, "[Error] Failed to select a valid HybridEP GID index\n");
+    std::abort();
+  }
 
   // Alloc protect domain.
   ib_pd = ibv_alloc_pd(ib_context);

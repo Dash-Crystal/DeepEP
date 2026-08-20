@@ -260,7 +260,7 @@ Hybrid-EP uses two categories of GPU memory:
 - **Registered Buffer**: GPU memory registered for cross-rank access. For inter-node, memory is registered with RDMA; for intra-node, a CUDA IPC handle is exported.
 - **Normal Buffer**: Standard `cudaMalloc` memory for local computation, not accessible by other ranks.
 
-**GPU-NIC Mapping for RDMA**
+**RDMA Network Configuration**
 
 For RDMA scenarios, buffer registration requires establishing a GPU-NIC mapping to specify which network interface each GPU uses for communication. The backend supports automatic topology discovery by default. If manual configuration is needed, the following environment variables can be used:
 
@@ -268,6 +268,14 @@ For RDMA scenarios, buffer registration requires establishing a GPU-NIC mapping 
 |---------------------|-------------|
 | `HYBRID_EP_ENABLE_MANUAL_NIC_MAPPING` | Set to `1` to enable manual NIC mapping; otherwise, automatic topology discovery is used |
 | `HYBRID_EP_NIC_MAPPING` | GPU-to-NIC mapping string in the format `<gpu_id>:<nic_name>,...` |
+
+The DOCA backend also honors the standard NCCL InfiniBand/RoCE settings when creating its queue pairs:
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `NCCL_IB_GID_INDEX` | GID table index used for RoCE. The default `-1` selects a GID automatically; an explicit index must reference a configured GID |
+| `NCCL_IB_ADDR_FAMILY` | Address family (`AF_INET` or `AF_INET6`) used during automatic GID selection. The default is `AF_INET` |
+| `NCCL_IB_TC` | RoCE traffic class in the range 0–255. Unset or `-1` uses the default `0` |
 
 ### 4.2 Buffer Allocation
 

@@ -1,10 +1,7 @@
 [build-system]
 requires = [
     "ninja>=1.13.0",
-    "nvidia-nccl-cu13==2.30.4; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "nvidia-nvshmem-cu13==3.4.5; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "setuptools>=77.0.3,<81.0.0",
-    "torch==2.13.0",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -13,9 +10,9 @@ name = "deep-ep"
 version = "2.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "nvidia-nccl-cu13==2.30.4; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "nvidia-nvshmem-cu13==3.4.5; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torch==2.13.0",
+    "nvidia-nccl-cu13; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-nvshmem-cu13; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch",
 ]
 
 [tool.yapf]

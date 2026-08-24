@@ -1,9 +1,12 @@
 #include <cstring>
-#include <vector>
-#include <string>
+#include <cstdlib>
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 #include <sstream>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include <nccl.h>
 #include <nccl_device/core.h>
@@ -16,6 +19,44 @@
 
 
 namespace deep_ep::nccl {
+
+template <typename Requirements, typename = void>
+struct has_gin_traffic_class : std::false_type {};
+
+template <typename Requirements>
+struct has_gin_traffic_class<
+    Requirements,
+    std::void_t<decltype(std::declval<Requirements&>().ginTrafficClass)>>
+    : std::true_type {};
+
+template <typename Requirements>
+void configure_gin_traffic_class(Requirements& requirements,
+                                 const int traffic_class) {
+    if constexpr (has_gin_traffic_class<Requirements>::value)
+        requirements.ginTrafficClass = traffic_class;
+}
+
+template <typename Requirements, typename Properties, typename = void>
+struct has_runtime_dev_comm_storage : std::false_type {};
+
+template <typename Requirements, typename Properties>
+struct has_runtime_dev_comm_storage<
+    Requirements,
+    Properties,
+    std::void_t<
+        decltype(std::declval<Requirements&>().useRuntimeVersion),
+        decltype(std::declval<const Properties&>().devCommRuntimeVersionSize)>>
+    : std::true_type {};
+
+template <typename Requirements, typename Properties>
+size_t configure_dev_comm_storage(Requirements& requirements,
+                                  const Properties& properties) {
+    if constexpr (has_runtime_dev_comm_storage<Requirements, Properties>::value) {
+        requirements.useRuntimeVersion = true;
+        return properties.devCommRuntimeVersionSize;
+    }
+    return sizeof(ncclDevComm_t);
+}
 
 pybind11::bytearray get_local_unique_id() {
     ncclUniqueId unique_id;
@@ -65,13 +106,6 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
                                                        const bool& allow_hybrid_mode,
                                                        const int& sl_idx, const int& num_allocated_qps):
     rank_idx(rank_idx), num_ranks(num_ranks), num_allocated_qps(num_allocated_qps) {
-    int nccl_runtime_version;
-    NCCL_CHECK(ncclGetVersion(&nccl_runtime_version));
-    if (get_env("EP_BUFFER_DEBUG", 0)) {
-        printf("DeepEP initialized with NCCL version: %d.%d.%d (loaded library)\n",
-               nccl_runtime_version / 10000, (nccl_runtime_version % 10000) / 100, nccl_runtime_version % 100);
-    }
-
     // Reuse the NCCL communicator
     comm = reinterpret_cast<ncclComm_t>(nccl_comm);
 
@@ -92,18 +126,12 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
         reqs.ginContextCount = num_allocated_qps;
         reqs.ginExclusiveContexts = true;
         reqs.ginQueueDepth = kGinQPDepth;
-        reqs.ginTrafficClass = sl_idx;
+        configure_gin_traffic_class(reqs, sl_idx);
         // Customized RDMA barrier needs extra signals
         reqs.ginSignalCount = num_ranks + 2 * 2;
         reqs.ginConnectionType = allow_hybrid_mode ? NCCL_GIN_CONNECTION_RAIL: NCCL_GIN_CONNECTION_FULL;
     }
-#if NCCL_VERSION_CODE >= NCCL_VERSION(2, 31, 0)
-    reqs.useRuntimeVersion = true;
-    dev_comm.ptr = malloc(props.devCommRuntimeVersionSize);
-#else
-    EP_HOST_ASSERT(NCCL_VERSION_CODE == nccl_runtime_version and "Prior to NCCL 2.31, NCCL compile-time and runtime versions must be the same. Please re-compile DeepEP.");
-    dev_comm.ptr = malloc(sizeof(ncclDevComm_t));
-#endif
+    dev_comm.ptr = malloc(configure_dev_comm_storage(reqs, props));
     EP_HOST_ASSERT(dev_comm.ptr != nullptr);
     NCCL_CHECK(ncclDevCommCreate(comm, &reqs, static_cast<ncclDevComm_t*>(dev_comm.ptr)));
 

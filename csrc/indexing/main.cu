@@ -11,7 +11,6 @@
 
 // Engram
 #include <deep_ep/impls/engram_fetch.cuh>
-#include <deep_ep/impls/engram_fetch_wait.cuh>
 
 // PP
 #include <deep_ep/impls/pp_send_recv.cuh>

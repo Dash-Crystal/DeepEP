@@ -30,7 +30,6 @@ public:
         void* storage;
         void* fetched;
         int* indices;
-        ncclGinRequest_t* last_gin_requests;
         sf_pack_t* sf_table; sf_pack_t* fetched_sf;
         int sf_token_stride; int sf_hidden_stride;
         int num_tokens;
@@ -72,7 +71,6 @@ static void __instantiate_kernel() {{
             args.nccl_dev_comm, args.nccl_window,
             args.storage, args.fetched,
             args.indices,
-            args.last_gin_requests,
             args.sf_table, args.fetched_sf,
             args.sf_token_stride, args.sf_hidden_stride,
             args.num_tokens
@@ -83,7 +81,6 @@ static void __instantiate_kernel() {{
 static void launch_engram_fetch(const jit::NoRefPtr& nccl_dev_comm, const ncclWindow_t& nccl_window,
                                 void* storage, void* fetched,
                                 int* indices,
-                                ncclGinRequest_t* last_gin_requests,
                                 void* sf_table, void* fetched_sf,
                                 const int& sf_token_stride, const int& sf_hidden_stride,
                                 const int& num_entries_per_rank,
@@ -113,7 +110,6 @@ static void launch_engram_fetch(const jit::NoRefPtr& nccl_dev_comm, const ncclWi
         .storage = storage,
         .fetched = fetched,
         .indices = indices,
-        .last_gin_requests = last_gin_requests,
         .sf_table = static_cast<sf_pack_t*>(sf_table),
         .fetched_sf = static_cast<sf_pack_t*>(fetched_sf),
         .sf_token_stride = sf_token_stride,
@@ -123,69 +119,6 @@ static void launch_engram_fetch(const jit::NoRefPtr& nccl_dev_comm, const ncclWi
     const auto code = EngramFetchRuntime::generate(args);
     const auto runtime = jit::compiler->build("engram_fetch", code);
     EngramFetchRuntime::launch(runtime, args, stream);
-}
-
-class EngramFetchWaitRuntime final : public jit::LaunchRuntime<EngramFetchWaitRuntime> {
-public:
-    struct Args {
-        // Templated arguments
-        int num_scaleout_ranks, num_scaleup_ranks;
-        bool allow_hybrid_mode;
-
-        jit::NoRefPtr nccl_dev_comm;
-        ncclWindow_t nccl_window;
-        ncclGinRequest_t* last_gin_requests;
-
-        jit::LaunchArgs launch_args;
-    };
-
-    static std::string generate_impl(const Args& args) {
-        const int num_rdma_peers = args.allow_hybrid_mode
-            ? args.num_scaleout_ranks
-            : args.num_scaleout_ranks * args.num_scaleup_ranks;
-        auto func_name = fmt::format("engram_fetch_wait_impl<{}, {}>",
-            num_rdma_peers, args.launch_args.num_threads);
-
-        return fmt::format(R"(
-#include <deep_ep/impls/engram_fetch_wait.cuh>
-
-using namespace deep_ep::elastic;
-
-static void __instantiate_kernel() {{
-    auto ptr = reinterpret_cast<void*>(&{});
-}}
-)", func_name);
-    }
-
-    static void launch_impl(const jit::KernelHandle& kernel, const jit::LaunchConfigHandle& config, Args args) {
-        EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
-            kernel, config,
-            args.nccl_dev_comm, args.nccl_window,
-            args.last_gin_requests
-        ));
-    }
-};
-
-static void launch_engram_fetch_wait(ncclGinRequest_t* last_gin_requests,
-                                     const jit::NoRefPtr& nccl_dev_comm, const ncclWindow_t& nccl_window,
-                                     const int& num_scaleout_ranks, const int& num_scaleup_ranks,
-                                     const int& num_qps,
-                                     const bool& allow_hybrid_mode,
-                                     const at::cuda::CUDAStream& stream) {
-    constexpr int kNumEngramFetchWaitThreads = 1024;
-
-    // Generate, build and launch
-    const EngramFetchWaitRuntime::Args args = {
-        .num_scaleout_ranks = num_scaleout_ranks,
-        .num_scaleup_ranks = num_scaleup_ranks,
-        .allow_hybrid_mode = allow_hybrid_mode,
-        .nccl_dev_comm = nccl_dev_comm,
-        .nccl_window = nccl_window,
-        .last_gin_requests = last_gin_requests,
-        .launch_args = jit::LaunchArgs(num_qps, kNumEngramFetchWaitThreads)};
-    const auto code = EngramFetchWaitRuntime::generate(args);
-    const auto runtime = jit::compiler->build("engram_fetch_wait", code);
-    EngramFetchWaitRuntime::launch(runtime, args, stream);
 }
 
 }  // namespace deep_ep::elastic

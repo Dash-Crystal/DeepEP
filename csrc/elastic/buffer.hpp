@@ -239,7 +239,7 @@ public:
         barrier(false, true);
     }
 
-    std::function<std::tuple<torch::Tensor, std::optional<torch::Tensor>>()>
+    std::tuple<torch::Tensor, std::optional<torch::Tensor>>
     engram_fetch(const torch::Tensor& indices, int num_qps, const bool& use_tma_aligned_col_major_sf) const {
         const auto use_fp8 = engram_sf.has_value();
         const auto fetched_dtype = use_fp8 ? torch::kFloat8_e4m3fn : torch::kBFloat16;
@@ -279,22 +279,12 @@ public:
             fetched_sf_ptr = fetched_sf->data_ptr();
         }
 
-        // Last issued Gin requests
-        const auto num_gin_ranks = allow_hybrid_mode
-            ? nccl_context->num_scaleout_ranks
-            : nccl_context->num_ranks;
-        const auto last_gin_requests = torch::empty(
-            {num_gin_ranks * num_qps, sizeof(ncclGinRequest_t)},
-            torch::TensorOptions().dtype(torch::kByte).device(torch::kCUDA)
-        );
-
         // Launch the fetch kernel
         launch_engram_fetch(
             nccl_context->dev_comm, nccl_context->window,
             math::advance_ptr(buffer, num_gpu_buffer_bytes),
             fetched.data_ptr(),
             indices.data_ptr<int>(),
-            static_cast<ncclGinRequest_t*>(last_gin_requests.data_ptr()),
             sf_table_ptr, fetched_sf_ptr, sf_token_stride, sf_hidden_stride,
             num_engram_entries,
             engram_hidden, elem_size, num_sf_packs,
@@ -307,21 +297,7 @@ public:
             allow_hybrid_mode,
             at::cuda::getCurrentCUDAStream()
         );
-
-        return [=, this]() -> std::tuple<torch::Tensor, std::optional<torch::Tensor>> {
-            // Wait for all RDMA gets to complete
-            launch_engram_fetch_wait(
-                static_cast<ncclGinRequest_t*>(last_gin_requests.data_ptr()),
-                nccl_context->dev_comm,
-                nccl_context->window,
-                nccl_context->num_scaleout_ranks,
-                nccl_context->num_scaleup_ranks,
-                num_qps,
-                allow_hybrid_mode,
-                at::cuda::getCurrentCUDAStream()
-            );
-            return {fetched, fetched_sf};
-        };
+        return {fetched, fetched_sf};
     }
 
     void pp_set_config(const int64_t& num_max_tensor_bytes, const int& num_max_inflight_tensors) {

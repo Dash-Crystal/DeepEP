@@ -22,7 +22,6 @@ template <int kNumQPs,
 __global__ void __launch_bounds__(kNumThreads, 1)
 engram_fetch_impl(const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
                   void* storage, void* fetched, int* indices,
-                  ncclGinRequest_t* last_gin_requests,
                   const sf_pack_t* sf_table, sf_pack_t* fetched_sf,
                   const int sf_token_stride, const int sf_hidden_stride,
                   const int num_tokens) {
@@ -90,19 +89,10 @@ engram_fetch_impl(const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_win
     }
     __syncthreads();
 
-    // Issue flush per peer we sent to; its unconditional DB ring flushes all
-    // prior aggregated gets on the same QP.
-    if (ptx::elect_one_sync()) {
-        for (int i = warp_idx; i < kNumRDMAPeers; i += kNumWarps) {
-            const auto request_ptr = last_gin_requests + qp_idx * kNumRDMAPeers + i;
-            if (num_requests_per_peer[i] > 0) {
-                gin.flush_async<team_t, ncclCoopThread>(i, request_ptr);
-            } else {
-                EP_STATIC_ASSERT(sizeof(ncclGinRequest_t) == sizeof(int4), "Invalid request size");
-                *reinterpret_cast<int4*>(request_ptr) = make_int4(0, 0, 0, 0);
-            }
-        }
-    }
+    // One device-side completion point per QP makes every issued get visible
+    // to subsequent work on the caller-owned stream.
+    if (thread_idx == 0)
+        gin.flush<ncclCoopThread>();
 }
 
 } // namespace deep_ep::elastic

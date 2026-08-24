@@ -3,7 +3,7 @@ import os
 import math
 import torch
 import torch.distributed as dist
-from typing import Callable, Optional, Tuple, Union, List, Sequence
+from typing import Optional, Tuple, Union, List, Sequence
 from contextlib import contextmanager
 
 # noinspection PyUnresolvedReferences
@@ -581,11 +581,15 @@ class ElasticBuffer:
         """
         self.runtime.engram_write(storage, sf)
 
-    def engram_fetch(self, indices: torch.Tensor, num_qps: int = 0,
-                     use_tma_aligned_col_major_sf: bool = False) -> Callable:
+    def engram_fetch(
+        self,
+        indices: torch.Tensor,
+        num_qps: int = 0,
+        use_tma_aligned_col_major_sf: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         (Experimental) Fetch Engram entries from remote ranks via RDMA.
-        Returns a callable that, when invoked, waits for the RDMA gets to complete and returns the fetched tensor.
+        The returned tensors are ordered after the RDMA gets on the caller-owned CUDA stream.
 
         Arguments:
             indices: `[num_tokens, num_entries_per_token]` with `torch.int`, the entry indices to fetch.
@@ -595,8 +599,8 @@ class ElasticBuffer:
                 column-major layout (otherwise a plain row-major layout).
 
         Returns:
-            hook: a callable that blocks until data arrives and returns `(data, sf)`, where `data` has
-                shape `[num_tokens * num_entries_per_token, hidden]` (`torch.bfloat16`, or
+            `(data, sf)`, where `data` has
+                shape `[num_tokens, num_entries_per_token * hidden]` (`torch.bfloat16`, or
                 `torch.float8_e4m3fn` in FP8 mode) and `sf` is the gathered scaling factors with shape
                 `[num_tokens, num_entries_per_token * num_sf_packs]` in FP8 mode, otherwise `None`.
                 In FP8 mode the factors come from the `sf` tensor supplied at `engram_write`.

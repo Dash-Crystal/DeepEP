@@ -119,11 +119,6 @@ struct NCCLGin {
         }
     }
 
-    __device__ __forceinline__
-    void wait(ncclGinRequest_t& request) const {
-        gin.wait(request);
-    }
-
     template <typename team_t, typename coop_t = ncclCoopThread, typename segment_t = ncclGin_SegmentDevice>
     __device__ __forceinline__
     void get(void* src_ptr, void* dst_ptr, const int& num_bytes, const int& src_rank_idx,
@@ -147,21 +142,6 @@ struct NCCLGin {
     __device__ __forceinline__
     void flush() const {
         gin.flush(coop_t());
-    }
-
-    template <typename team_t, typename coop_t = ncclCoopThread>
-    __device__ __forceinline__
-    void flush_async(const int& src_rank_idx, ncclGinRequest_t* request,
-                     const int& extra_options = 0) const {
-        IS_TEAM_WORLD_RAIL({
-            gin.flushAsync(
-                TEAM_WORLD_RAIL(),
-                src_rank_idx,
-                request,
-                coop_t(),
-                ncclGinOptFlagsDefault | extra_options
-            );
-        });
     }
 
     template <typename team_t, typename remote_action_t>

@@ -573,20 +573,20 @@ void dispatch(void* recv_x,
               int num_sms,
               int num_max_send_tokens,
               int num_recv_buffer_tokens) {
-    constexpr int kNumThreads = 768;
     constexpr int kNumTMABytesPerWarp = 8192;
-#ifndef DISABLE_SM90_FEATURES
-    constexpr int smem_size = kNumTMABytesPerWarp * (kNumThreads / 32);
-#endif
 
     // Make sure never OOB
     EP_HOST_ASSERT(static_cast<int64_t>(num_scales) * scale_hidden_stride < std::numeric_limits<int>::max());
 
-#define DISPATCH_LAUNCH_CASE(ranks)                                      \
-    {                                                                    \
-        auto kernel = dispatch<ranks, kNumThreads, kNumTMABytesPerWarp>; \
-        SET_SHARED_MEMORY_FOR_TMA(kernel);                               \
-        LAUNCH_KERNEL(&cfg,                                              \
+#define DISPATCH_LAUNCH_CASE(ranks, threads)                              \
+    {                                                                     \
+        constexpr int kNumThreads = threads;                              \
+        constexpr int smem_size =                                         \
+            kNumTMABytesPerWarp * (kNumThreads / 32);                     \
+        SETUP_LAUNCH_CONFIG(num_sms, kNumThreads, stream);                \
+        auto kernel = dispatch<ranks, kNumThreads, kNumTMABytesPerWarp>;  \
+        SET_SHARED_MEMORY_FOR_TMA(kernel);                                \
+        LAUNCH_KERNEL(&cfg,                                               \
                       kernel,                                            \
                       reinterpret_cast<int4*>(recv_x),                   \
                       recv_x_scales,                                     \
@@ -618,8 +618,26 @@ void dispatch(void* recv_x,
 
     // Even-numbered blocks for sending, odd-numbered blocks for receiving.
     EP_HOST_ASSERT(num_sms % 2 == 0);
-    SETUP_LAUNCH_CONFIG(num_sms, kNumThreads, stream);
-    SWITCH_RANKS(DISPATCH_LAUNCH_CASE);
+#ifdef DEEPEP_SM120
+    // Keep TMA on SM120, but use rank-divisible warp extents whose per-warp
+    // 8 KiB staging fits the device: 96 KiB for EP2/EP4 and 64 KiB for EP8.
+    switch (num_ranks) {
+        case 2:
+            DISPATCH_LAUNCH_CASE(2, 384);
+        case 4:
+            DISPATCH_LAUNCH_CASE(4, 384);
+        case 8:
+            DISPATCH_LAUNCH_CASE(8, 256);
+        default:
+            EP_HOST_ASSERT(false and "Unsupported ranks");
+    }
+#else
+    constexpr int kNumThreads = 768;
+#define DISPATCH_DEFAULT_LAUNCH_CASE(ranks) \
+    DISPATCH_LAUNCH_CASE(ranks, kNumThreads)
+    SWITCH_RANKS(DISPATCH_DEFAULT_LAUNCH_CASE);
+#undef DISPATCH_DEFAULT_LAUNCH_CASE
+#endif
 #undef DISPATCH_LAUNCH_CASE
 }
 

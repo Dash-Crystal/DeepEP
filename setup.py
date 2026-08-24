@@ -144,6 +144,10 @@ if __name__ == '__main__':
         # CUDA 12 flags
         nvcc_flags.extend(['-rdc=true', '--ptxas-options=--register-usage-level=10'])
 
+    if int(os.getenv('DEEPEP_SM120', 0)):
+        cxx_flags.append('-DDEEPEP_SM120')
+        nvcc_flags.append('-DDEEPEP_SM120')
+
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     if os.environ['TORCH_CUDA_ARCH_LIST'].strip() != '9.0':
         assert int(os.getenv('DISABLE_AGGRESSIVE_PTX_INSTRS', 1)) == 1

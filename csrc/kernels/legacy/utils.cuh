@@ -521,12 +521,51 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
         __syncthreads();
     }
 
+    EP_DEVICE_ASSERT(kNumRanks <= blockDim.x);
+
+#ifdef DEEPEP_SM120
+    // The SM120 GeForce transport exposes peer reads and writes but not peer
+    // atomics.  Keep one monotonically increasing generation in the local
+    // diagonal slot, publish that generation into every peer's rank slot,
+    // and wait for the matching generation in each local peer slot.  Each
+    // rank owns its diagonal and each peer owns one off-diagonal producer,
+    // so this is the same reusable all-rank barrier without an atomic RMW.
+    __shared__ int barrier_generation;
+    if (thread_id == 0) {
+        auto diagonal = barrier_signal_ptrs[rank] + rank;
+        auto generation = ld_volatile_global(diagonal) + 1;
+        st_release_sys_global(diagonal, generation);
+        barrier_generation = generation;
+    }
+    __syncthreads();
+
+    if (thread_id < kNumRanks and thread_id != rank)
+        st_release_sys_global(barrier_signal_ptrs[thread_id] + rank, barrier_generation);
+    __syncthreads();
+
+    // Check timeout
+    auto start_time = clock64();
+    while (true) {
+        auto arrived = thread_id >= kNumRanks or thread_id == rank or
+                       ld_acquire_sys_global(barrier_signal_ptrs[rank] + thread_id) >= barrier_generation;
+        if (__all_sync(0xffffffff, arrived))
+            break;
+
+        if (clock64() - start_time > LEGACY_NUM_TIMEOUT_CYCLES and thread_id < kNumRanks and not arrived) {
+            printf("DeepEP timeout check failed: rank = %d, peer = %d, expected generation = %d, observed = %d)\n",
+                   rank,
+                   thread_id,
+                   barrier_generation,
+                   ld_volatile_global(barrier_signal_ptrs[rank] + thread_id));
+            trap();
+        }
+    }
+#else
     // Add self-ranks, sub other ranks
     if (thread_id < kNumRanks) {
         atomicAdd_system(barrier_signal_ptrs[rank] + thread_id, LEGACY_FINISHED_SUM_TAG);
         atomicSub_system(barrier_signal_ptrs[thread_id] + rank, LEGACY_FINISHED_SUM_TAG);
     }
-    EP_DEVICE_ASSERT(kNumRanks <= blockDim.x);
 
     // Check timeout
     auto start_time = clock64();
@@ -540,6 +579,7 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
             trap();
         }
     }
+#endif
     __syncthreads();
 }
 

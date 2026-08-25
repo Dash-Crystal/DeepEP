@@ -525,29 +525,34 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
 
 #ifdef DEEPEP_SM120
     // The SM120 GeForce transport exposes peer reads and writes but not peer
-    // atomics.  Keep one monotonically increasing generation in the local
-    // diagonal slot, publish that generation into every peer's rank slot,
-    // and wait for the matching generation in each local peer slot.  Each
-    // rank owns its diagonal and each peer owns one off-diagonal producer,
-    // so this is the same reusable all-rank barrier without an atomic RMW.
+    // atomics. Concurrent streams take distinct generations from one local
+    // counter and publish through distinct peer mailbox slots.
     __shared__ int barrier_generation;
     if (thread_id == 0) {
-        auto diagonal = barrier_signal_ptrs[rank] + rank;
-        auto generation = ld_volatile_global(diagonal) + 1;
-        st_release_sys_global(diagonal, generation);
-        barrier_generation = generation;
+        auto counter = barrier_signal_ptrs[rank] +
+                       LEGACY_NUM_MAX_NVL_PEERS * LEGACY_NUM_BARRIER_SLOTS;
+        barrier_generation = atomic_add_release_global(counter, 1) + 1;
     }
     __syncthreads();
 
-    if (thread_id < kNumRanks and thread_id != rank)
-        st_release_sys_global(barrier_signal_ptrs[thread_id] + rank, barrier_generation);
+    const auto barrier_slot = barrier_generation % LEGACY_NUM_BARRIER_SLOTS;
+    if (thread_id < kNumRanks and thread_id != rank) {
+        auto peer_mailbox = barrier_signal_ptrs[thread_id] +
+                            rank * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
+        st_release_sys_global(peer_mailbox, barrier_generation);
+    }
     __syncthreads();
 
     // Check timeout
     auto start_time = clock64();
     while (true) {
-        auto arrived = thread_id >= kNumRanks or thread_id == rank or
-                       ld_acquire_sys_global(barrier_signal_ptrs[rank] + thread_id) >= barrier_generation;
+        int observed = barrier_generation;
+        if (thread_id < kNumRanks and thread_id != rank) {
+            auto local_mailbox = barrier_signal_ptrs[rank] +
+                                 thread_id * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
+            observed = ld_acquire_sys_global(local_mailbox);
+        }
+        auto arrived = observed >= barrier_generation;
         if (__all_sync(0xffffffff, arrived))
             break;
 
@@ -556,7 +561,7 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
                    rank,
                    thread_id,
                    barrier_generation,
-                   ld_volatile_global(barrier_signal_ptrs[rank] + thread_id));
+                   observed);
             trap();
         }
     }

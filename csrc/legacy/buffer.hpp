@@ -98,7 +98,8 @@ public:
       comm_stream(at::cuda::getStreamFromPool(true)),
       shared_memory_allocator(use_fabric) {
         // Metadata memory
-        int64_t barrier_signal_bytes = LEGACY_NUM_MAX_NVL_PEERS * sizeof(int);
+        int64_t barrier_signal_bytes =
+            (LEGACY_NUM_MAX_NVL_PEERS * LEGACY_NUM_BARRIER_SLOTS + 1) * sizeof(int);
         int64_t buffer_ptr_bytes = LEGACY_NUM_MAX_NVL_PEERS * sizeof(void*);
         int64_t barrier_signal_ptr_bytes = LEGACY_NUM_MAX_NVL_PEERS * sizeof(int*);
 

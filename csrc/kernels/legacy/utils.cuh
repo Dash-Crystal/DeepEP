@@ -86,6 +86,10 @@ __device__ __forceinline__ void st_release_sys_global(const int* ptr, int val) {
     asm volatile("st.release.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
 }
 
+__device__ __forceinline__ void st_write_through_sys_global(const int* ptr, int val) {
+    asm volatile("st.global.wt.s32 [%0], %1;\n\tfence.sc.sys;" ::"l"(ptr), "r"(val) : "memory");
+}
+
 __device__ __forceinline__ void st_release_cta(const int* ptr, int val) {
     asm volatile("st.release.cta.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
 }
@@ -539,7 +543,7 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
     if (thread_id == 0) {
         auto local_mailbox = barrier_signal_ptrs[rank] +
                              rank * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
-        st_release_sys_global(local_mailbox, barrier_generation);
+        st_write_through_sys_global(local_mailbox, barrier_generation);
     }
     __syncthreads();
 

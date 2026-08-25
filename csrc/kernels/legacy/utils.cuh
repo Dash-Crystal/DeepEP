@@ -536,10 +536,10 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
     __syncthreads();
 
     const auto barrier_slot = barrier_generation % LEGACY_NUM_BARRIER_SLOTS;
-    if (thread_id < kNumRanks and thread_id != rank) {
-        auto peer_mailbox = barrier_signal_ptrs[thread_id] +
-                            rank * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
-        st_release_sys_global(peer_mailbox, barrier_generation);
+    if (thread_id == 0) {
+        auto local_mailbox = barrier_signal_ptrs[rank] +
+                             rank * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
+        st_release_sys_global(local_mailbox, barrier_generation);
     }
     __syncthreads();
 
@@ -548,9 +548,9 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
     while (true) {
         int observed = barrier_generation;
         if (thread_id < kNumRanks and thread_id != rank) {
-            auto local_mailbox = barrier_signal_ptrs[rank] +
-                                 thread_id * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
-            asm volatile("ld.global.cv.s32 %0, [%1];" : "=r"(observed) : "l"(local_mailbox));
+            auto peer_mailbox = barrier_signal_ptrs[thread_id] +
+                                thread_id * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
+            asm volatile("ld.global.cv.s32 %0, [%1];" : "=r"(observed) : "l"(peer_mailbox));
         }
         auto arrived = observed >= barrier_generation;
         if (__all_sync(0xffffffff, arrived))

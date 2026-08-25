@@ -550,7 +550,7 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
         if (thread_id < kNumRanks and thread_id != rank) {
             auto local_mailbox = barrier_signal_ptrs[rank] +
                                  thread_id * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
-            observed = ld_volatile_global(local_mailbox);
+            asm volatile("ld.global.cv.s32 %0, [%1];" : "=r"(observed) : "l"(local_mailbox));
         }
         auto arrived = observed >= barrier_generation;
         if (__all_sync(0xffffffff, arrived))

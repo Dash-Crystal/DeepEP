@@ -86,10 +86,6 @@ __device__ __forceinline__ void st_release_sys_global(const int* ptr, int val) {
     asm volatile("st.release.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
 }
 
-__device__ __forceinline__ void st_write_through_sys_global(const int* ptr, int val) {
-    asm volatile("st.global.wt.s32 [%0], %1;\n\tfence.sc.sys;" ::"l"(ptr), "r"(val) : "memory");
-}
-
 __device__ __forceinline__ void st_release_cta(const int* ptr, int val) {
     asm volatile("st.release.cta.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
 }
@@ -540,10 +536,10 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
     __syncthreads();
 
     const auto barrier_slot = barrier_generation % LEGACY_NUM_BARRIER_SLOTS;
-    if (thread_id == 0) {
-        auto local_mailbox = barrier_signal_ptrs[rank] +
-                             rank * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
-        st_write_through_sys_global(local_mailbox, barrier_generation);
+    if (thread_id < kNumRanks and thread_id != rank) {
+        auto peer_mailbox = barrier_signal_ptrs[thread_id] +
+                            rank * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
+        asm volatile("st.volatile.global.s32 [%0], %1;" ::"l"(peer_mailbox), "r"(barrier_generation) : "memory");
     }
     __syncthreads();
 
@@ -552,11 +548,11 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
     while (true) {
         int observed = barrier_generation;
         if (thread_id < kNumRanks and thread_id != rank) {
-            auto peer_mailbox = barrier_signal_ptrs[thread_id] +
-                                thread_id * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
-            asm volatile("ld.global.cv.s32 %0, [%1];" : "=r"(observed) : "l"(peer_mailbox));
+            auto local_mailbox = barrier_signal_ptrs[rank] +
+                                 thread_id * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
+            asm volatile("ld.volatile.global.s32 %0, [%1];" : "=r"(observed) : "l"(local_mailbox));
         }
-        auto arrived = observed >= barrier_generation;
+        auto arrived = observed == barrier_generation;
         if (__all_sync(0xffffffff, arrived))
             break;
 

@@ -550,7 +550,7 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
         if (thread_id < kNumRanks and thread_id != rank) {
             auto local_mailbox = barrier_signal_ptrs[rank] +
                                  thread_id * LEGACY_NUM_BARRIER_SLOTS + barrier_slot;
-            observed = ld_acquire_sys_global(local_mailbox);
+            observed = ld_volatile_global(local_mailbox);
         }
         auto arrived = observed >= barrier_generation;
         if (__all_sync(0xffffffff, arrived))
@@ -565,6 +565,7 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs, int ran
             trap();
         }
     }
+    memory_fence();
 #else
     // Add self-ranks, sub other ranks
     if (thread_id < kNumRanks) {
